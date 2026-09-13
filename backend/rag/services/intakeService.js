@@ -1030,6 +1030,7 @@ function buildSystemPrompt(section, structuredHistory, intakeMethod, lastQuestio
 LANGUAGE — read this before anything else:
 Write EVERY patient-facing string in ${languageName}. That means "next_question" (including the "finalize" closing message) and every string inside "quick_reply_options.options" — those are shown to the patient and read aloud to them, so a patient who only reads ${languageName} must be able to understand them completely.
 Keep widely-recognised clinical terms and medicine names as-is where a patient would actually recognise them better that way (e.g. "fever", "BP", "sugar", brand names) rather than forcing an unnatural literal translation — natural clinic speech, not textbook translation.
+Never write BOTH the ${languageName} word/phrase AND its English translation together, in parentheses or otherwise (e.g. "धड़कन वाला (Throbbing)", "तेज़ चुभने वाला (Sharp)") — pick ONE, per the rule above, and write only that. A patient reading ${languageName} does not need or want an English gloss bolted onto every option; it reads as unfinished translation, not natural clinic speech.
 EXCEPTION — "updated_fields" is NOT patient-facing: every value you write inside "updated_fields" must stay in ENGLISH, exactly as before, because it becomes the doctor's clinical record. So you may ask the patient a question in ${languageName} and record their answer in English in the same turn. JSON keys/field names are ALWAYS English and never translated.
 
 ONE QUESTION PER TURN — this is a hard rule:
@@ -1344,6 +1345,22 @@ const LATIN_LETTER_RE = /[A-Za-z]/;
  * Devanagari", since there is no legitimate reason for Devanagari to
  * appear in an English-session question.
  */
+// A parenthesized run of Latin letters — e.g. the "(Throbbing)" in
+// "धड़कन वाला (Throbbing)" — is a different failure mode than ordinary
+// code-mixing and needs its own, narrower check: matchesSessionLanguage's
+// "contains Devanagari at all" test is deliberately lenient so a single
+// bare English clinical term ("fever", "BP") mixed into Hindi copy still
+// passes, but that same leniency also waves through a full bilingual gloss
+// bolted onto every option, which is not natural code-mixing — it is the
+// prompt's translation left unfinished, both languages shipped at once.
+// Live repro: "धड़कन वाला (Throbbing)", "तेज़ चुभने वाला (Sharp)",
+// "भारीपन या दबाव (Dull/Pressure)" — every option in the set carrying its
+// own English translation in parentheses. A bare parenthetical unit/number
+// aside ("5-6 hours" has no parens; "(1 से 10 के बीच)" is Devanagari inside
+// the parens, not Latin) never matches this, so it only fires on an actual
+// English gloss.
+const PARENTHESIZED_LATIN_GLOSS_RE = /\([^()]*[A-Za-z]{2,}[^()]*\)/;
+
 function matchesSessionLanguage(text, language) {
   const t = String(text || '').trim();
   if (!t) return true; // empty is handled by the empty-question fallback, not here
@@ -1351,6 +1368,7 @@ function matchesSessionLanguage(text, language) {
     // Only judge strings that actually contain letters — a pure "1-10" or
     // "5–6" option label is script-neutral and always acceptable.
     if (!LATIN_LETTER_RE.test(t)) return true;
+    if (PARENTHESIZED_LATIN_GLOSS_RE.test(t)) return false;
     return DEVANAGARI_RE.test(t);
   }
   if (language === 'en-IN') return !DEVANAGARI_RE.test(t);
